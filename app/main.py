@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from downloader import download_video
+from .downloader import download_video   # relative import
 
 app = FastAPI()
 
