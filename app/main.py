@@ -14,3 +14,4 @@ def download(url: str):
         return {"status": "success", "file": file_path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+app.mount("/downloads", StaticFiles(directory="downloads"), name="downloads")
