@@ -1,15 +1,12 @@
-FROM node:20-bullseye
-
-# Install yt-dlp and ffmpeg
-RUN apt-get update && apt-get install -y python3-pip ffmpeg && \
-    pip3 install yt-dlp && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+FROM python:3.11-slim
 
 WORKDIR /app
-COPY package.json package-lock.json* /app/
-RUN npm install --production
 
-COPY . /app
-RUN mkdir -p /app/public/downloads
-EXPOSE 3000
-CMD ["node", "index.js"]
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
