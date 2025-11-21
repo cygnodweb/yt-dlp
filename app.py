@@ -5,9 +5,8 @@ import os
 import time
 import threading
 import tempfile
-from pathlib import Path
-import http.cookiejar
 import logging
+import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,14 +24,14 @@ class AdvancedYouTubeDownloader:
         self.temp_dir = tempfile.mkdtemp()
         self.cookies_file = "cookies.txt"
         self.user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-
+        
         # Verify cookies file exists
         if not os.path.exists(self.cookies_file):
             logger.warning(f"Cookies file '{self.cookies_file}' not found. Downloading without cookies.")
-
+        
     def get_ydl_options(self, format_type='best'):
         """Get yt-dlp options with custom cookies and user agent"""
-
+        
         options = {
             'outtmpl': os.path.join(self.temp_dir, '%(title).100s.%(ext)s'),
             'quiet': False,
@@ -59,13 +58,14 @@ class AdvancedYouTubeDownloader:
             'prefer_insecure': False,
             'geo_bypass': True,
             'geo_bypass_country': 'US',
+            'verbose': True,
         }
-
+        
         # Add cookies if file exists
         if os.path.exists(self.cookies_file):
             options['cookiefile'] = self.cookies_file
             logger.info("Using cookies from cookies.txt")
-
+        
         # Format specific options
         if format_type == 'audio':
             options.update({
@@ -92,43 +92,43 @@ class AdvancedYouTubeDownloader:
             options.update({
                 'format': 'best[height<=720]/best',
             })
-
+            
         return options
-
+    
     def download_video(self, url, format_type='best'):
         """Download video with enhanced error handling"""
         try:
             logger.info(f"Starting download: {url} with format {format_type}")
-
+            
             options = self.get_ydl_options(format_type)
-
+            
             with yt_dlp.YoutubeDL(options) as ydl:
                 # First get info without downloading
                 info = ydl.extract_info(url, download=False)
-
+                
                 if not info:
-                    return {'error': 'Could not extract video information'}
-
+                    return {'error': 'Could not extract video information - video may be private, age-restricted, or unavailable'}
+                
                 # Check file size
                 filesize = info.get('filesize') or info.get('filesize_approx')
                 if filesize and filesize > MAX_FILE_SIZE:
                     return {'error': f'File too large ({filesize//1024//1024}MB). Maximum allowed: {MAX_FILE_SIZE//1024//1024}MB'}
-
+                
                 # Check duration (optional - limit to 2 hours for free tier)
                 duration = info.get('duration', 0)
                 if duration > 7200:  # 2 hours
                     return {'error': 'Video too long (max 2 hours allowed)'}
-
+                
                 # Download the video
                 result = ydl.extract_info(url, download=True)
-
+                
                 filename = ydl.prepare_filename(result)
                 if format_type == 'audio':
                     filename = filename.replace('.webm', '.mp3').replace('.m4a', '.mp3')
-
+                
                 # Clean filename
                 safe_title = "".join(c for c in result.get('title', 'video') if c.isalnum() or c in (' ', '-', '_')).rstrip()
-
+                
                 return {
                     'success': True,
                     'filename': filename,
@@ -139,12 +139,21 @@ class AdvancedYouTubeDownloader:
                     'view_count': result.get('view_count', 0),
                     'description': result.get('description', '')[:200] + '...' if result.get('description') else ''
                 }
-
+                
         except yt_dlp.utils.DownloadError as e:
             logger.error(f"Download error: {e}")
-            return {'error': f'Download failed: {str(e)}'}
+            error_msg = str(e)
+            if "Private video" in error_msg:
+                return {'error': 'This is a private video. Cannot download.'}
+            elif "Sign in" in error_msg:
+                return {'error': 'Age-restricted video. Try using cookies.txt with logged-in session.'}
+            elif "Video unavailable" in error_msg:
+                return {'error': 'Video is unavailable or removed.'}
+            else:
+                return {'error': f'Download failed: {error_msg}'}
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
+            logger.error(traceback.format_exc())
             return {'error': f'Unexpected error: {str(e)}'}
 
 downloader = AdvancedYouTubeDownloader()
@@ -177,17 +186,21 @@ def get_video_info():
     url = request.args.get('url')
     if not url:
         return jsonify({'error': 'URL parameter required'}), 400
-
+    
     try:
+        # Validate URL
+        if not ('youtube.com/watch' in url or 'youtu.be/' in url):
+            return jsonify({'error': 'Please provide a valid YouTube URL'}), 400
+        
         options = downloader.get_ydl_options()
-        options['extract_flat'] = True
-
+        options['extract_flat'] = False
+        
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=False)
-
+            
             if not info:
-                return jsonify({'error': 'Could not fetch video information'}), 404
-
+                return jsonify({'error': 'Could not fetch video information. The video may be private, age-restricted, or unavailable.'}), 404
+            
             # Get available formats
             formats = []
             for f in info.get('formats', []):
@@ -200,7 +213,7 @@ def get_video_info():
                         'height': f.get('height'),
                         'width': f.get('width')
                     })
-
+            
             return jsonify({
                 'title': info.get('title', 'Unknown'),
                 'duration': info.get('duration', 0),
@@ -209,40 +222,57 @@ def get_video_info():
                 'view_count': info.get('view_count', 0),
                 'formats': formats[:10]  # Limit to first 10 formats
             })
-
+            
+    except yt_dlp.utils.DownloadError as e:
+        error_msg = str(e)
+        logger.error(f"Info extraction error: {error_msg}")
+        
+        if "Private video" in error_msg:
+            return jsonify({'error': 'This is a private video. Cannot access.'}), 403
+        elif "Sign in" in error_msg or "age restricted" in error_msg.lower():
+            return jsonify({'error': 'Age-restricted video. Try using a cookies.txt file with logged-in YouTube session.'}), 403
+        elif "Video unavailable" in error_msg:
+            return jsonify({'error': 'Video is unavailable or has been removed.'}), 404
+        else:
+            return jsonify({'error': f'Failed to get video info: {error_msg}'}), 500
     except Exception as e:
-        logger.error(f"Info error: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Unexpected error in info: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'Failed to get video information: {str(e)}'}), 500
 
 @app.route('/download')
 def download_video():
     """Download video endpoint with query parameters"""
     url = request.args.get('url')
     format_type = request.args.get('format', 'best')
-
+    
     if not url:
         return jsonify({'error': 'URL parameter is required'}), 400
-
+    
+    # Validate URL
+    if not ('youtube.com/watch' in url or 'youtu.be/' in url):
+        return jsonify({'error': 'Please provide a valid YouTube URL'}), 400
+    
     # Validate format
     valid_formats = ['best', 'audio', 'video_720', 'video_480', 'video_360']
     if format_type not in valid_formats:
         return jsonify({'error': f'Invalid format. Use: {", ".join(valid_formats)}'}), 400
-
+    
     logger.info(f"Download request - URL: {url}, Format: {format_type}")
-
+    
     result = downloader.download_video(url, format_type)
-
+    
     if 'error' in result:
         return jsonify(result), 500
-
+    
     try:
         # Get file extension
         ext = 'mp3' if format_type == 'audio' else result['filename'].split('.')[-1]
         download_name = f"{result['title']}.{ext}"
-
+        
         # Clean download name
         download_name = "".join(c for c in download_name if c.isalnum() or c in ('.', '-', '_'))
-
+        
         return send_file(
             result['filename'],
             as_attachment=True,
@@ -257,19 +287,23 @@ def download_video():
 def download_audio():
     """Download audio only endpoint"""
     url = request.args.get('url')
-
+    
     if not url:
         return jsonify({'error': 'URL parameter is required'}), 400
-
+    
+    # Validate URL
+    if not ('youtube.com/watch' in url or 'youtu.be/' in url):
+        return jsonify({'error': 'Please provide a valid YouTube URL'}), 400
+    
     result = downloader.download_video(url, 'audio')
-
+    
     if 'error' in result:
         return jsonify(result), 500
-
+    
     try:
         download_name = f"{result['title']}.mp3"
         download_name = "".join(c for c in download_name if c.isalnum() or c in ('.', '-', '_'))
-
+        
         return send_file(
             result['filename'],
             as_attachment=True,
@@ -289,8 +323,14 @@ def status():
         'temp_files': len(os.listdir(downloader.temp_dir)) if os.path.exists(downloader.temp_dir) else 0
     })
 
+# Health check endpoint for Render
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy'})
+
 if __name__ == '__main__':
     # Create templates directory if it doesn't exist
     os.makedirs('templates', exist_ok=True)
-
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
