@@ -8,8 +8,7 @@ import tempfile
 import logging
 import traceback
 import random
-import requests
-from urllib.parse import urlparse
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,65 +25,89 @@ class AdvancedYouTubeDownloader:
     def __init__(self):
         self.temp_dir = tempfile.mkdtemp()
         self.cookies_file = "cookies.txt"
-        self.user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
-        # Multiple user agents to rotate
+        # Enhanced user agents with more variety
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15"
         ]
         
         # Verify cookies file exists
         if not os.path.exists(self.cookies_file):
             logger.warning(f"Cookies file '{self.cookies_file}' not found. Downloading without cookies.")
+        else:
+            logger.info(f"Cookies file found with {len(open(self.cookies_file).readlines())} lines")
         
+    def get_random_headers(self):
+        """Generate random browser-like headers"""
+        user_agent = random.choice(self.user_agents)
+        
+        # Different Chrome versions for sec-ch-ua
+        chrome_versions = [
+            '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+            '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"'
+        ]
+        
+        return {
+            'User-Agent': user_agent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'sec-ch-ua': random.choice(chrome_versions),
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+        }
+    
     def get_ydl_options(self, format_type='best'):
         """Get yt-dlp options with enhanced anti-detection measures"""
         
-        # Rotate user agents
-        user_agent = random.choice(self.user_agents)
-        
         options = {
             'outtmpl': os.path.join(self.temp_dir, '%(title).100s.%(ext)s'),
-            'quiet': False,
+            'quiet': True,
             'no_warnings': False,
             'extract_flat': False,
-            'http_headers': {
-                'User-Agent': user_agent,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'max-age=0',
-                'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Linux"',
-            },
-            'sleep_interval': random.randint(2, 5),
-            'max_sleep_interval': 8,
+            'http_headers': self.get_random_headers(),
+            'sleep_interval': random.randint(3, 7),
+            'max_sleep_interval': 10,
             'ignoreerrors': True,
             'no_check_certificate': True,
             'prefer_insecure': False,
             'geo_bypass': True,
             'geo_bypass_country': 'US',
             'verbose': False,
+            # Enhanced extractor settings
+            'extractor_retries': 3,
+            'retries': 10,
+            'fragment_retries': 10,
+            'skip_unavailable_fragments': True,
+            'keep_fragments': True,
+            # YouTube specific settings
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'web'],
                     'player_skip': ['configs', 'webpage'],
+                    'skip': ['dash', 'hls'],
                 }
             },
             'postprocessor_args': {
                 'sponsorblock': ['--remove', 'all'],
-            }
+            },
+            # Throttling to appear more human
+            'throttled_rate': '512K',
+            'buffer_size': 1024 * 16,
         }
         
         # Add cookies if file exists
@@ -133,6 +156,22 @@ class AdvancedYouTubeDownloader:
             return f'https://www.youtube.com/watch?v={video_id}'
         return url
     
+    def test_cookies(self):
+        """Test if cookies are working"""
+        try:
+            test_url = "https://www.youtube.com"
+            options = {
+                'cookiefile': self.cookies_file,
+                'quiet': True,
+                'no_warnings': True,
+            }
+            with yt_dlp.YoutubeDL(options) as ydl:
+                # Try to extract a simple video
+                info = ydl.extract_info("https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False, process=False)
+                return info is not None
+        except:
+            return False
+    
     def download_video(self, url, format_type='best'):
         """Download video with enhanced error handling and URL normalization"""
         try:
@@ -140,14 +179,22 @@ class AdvancedYouTubeDownloader:
             normalized_url = self.normalize_youtube_url(url)
             logger.info(f"Starting download - Original: {url}, Normalized: {normalized_url}, Format: {format_type}")
             
+            # Test cookies first
+            if os.path.exists(self.cookies_file):
+                cookies_working = self.test_cookies()
+                logger.info(f"Cookies test: {'Working' if cookies_working else 'Not working'}")
+            
             options = self.get_ydl_options(format_type)
+            
+            # Add random delay to mimic human behavior
+            time.sleep(random.uniform(2, 5))
             
             with yt_dlp.YoutubeDL(options) as ydl:
                 # First get info without downloading
                 try:
                     info = ydl.extract_info(normalized_url, download=False, process=False)
                 except Exception as e:
-                    logger.error(f"Info extraction failed: {e}")
+                    logger.warning(f"Initial info extraction failed, retrying with process=True: {e}")
                     # Try with process=True for some videos
                     info = ydl.extract_info(normalized_url, download=False)
                 
@@ -164,10 +211,8 @@ class AdvancedYouTubeDownloader:
                 if duration > 7200:  # 2 hours
                     return {'error': 'Video too long (max 2 hours allowed)'}
                 
-                # Add random delay to mimic human behavior
-                time.sleep(random.uniform(1, 3))
-                
                 # Download the video
+                logger.info(f"Starting actual download for: {info.get('title', 'Unknown')}")
                 result = ydl.extract_info(normalized_url, download=True)
                 
                 filename = ydl.prepare_filename(result)
@@ -194,7 +239,7 @@ class AdvancedYouTubeDownloader:
             if "Private video" in error_msg:
                 return {'error': 'This is a private video. Cannot download.'}
             elif "Sign in" in error_msg or "bot" in error_msg.lower():
-                return {'error': 'YouTube is blocking requests. Try using a different video or check your cookies.txt file.'}
+                return {'error': 'YouTube is blocking automated requests. This is common on free hosting services. Try: 1) Using a different video 2) Waiting a few minutes 3) Using a different network'}
             elif "Video unavailable" in error_msg:
                 return {'error': 'Video is unavailable or removed.'}
             else:
@@ -281,7 +326,7 @@ def get_video_info():
         if "Private video" in error_msg:
             return jsonify({'error': 'This is a private video. Cannot access.'}), 403
         elif "Sign in" in error_msg or "age restricted" in error_msg.lower() or "bot" in error_msg.lower():
-            return jsonify({'error': 'YouTube is blocking automated requests. Try using a different video or ensure your cookies.txt is valid.'}), 403
+            return jsonify({'error': 'YouTube is blocking automated requests. This is common on free hosting. Try using a different video or network.'}), 403
         elif "Video unavailable" in error_msg:
             return jsonify({'error': 'Video is unavailable or has been removed.'}), 404
         else:
@@ -337,10 +382,11 @@ def download_video():
 @app.route('/status')
 def status():
     """Service status endpoint"""
+    cookies_working = downloader.test_cookies() if os.path.exists(downloader.cookies_file) else False
     return jsonify({
         'status': 'active',
-        'user_agent': 'Rotating user agents',
         'cookies_loaded': os.path.exists(downloader.cookies_file),
+        'cookies_working': cookies_working,
         'temp_files': len(os.listdir(downloader.temp_dir)) if os.path.exists(downloader.temp_dir) else 0
     })
 
@@ -348,6 +394,14 @@ def status():
 @app.route('/health')
 def health():
     return jsonify({'status': 'healthy'})
+
+# Test endpoint with a known working video
+@app.route('/test')
+def test_download():
+    """Test endpoint with a known working video"""
+    test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"  # First YouTube video
+    result = downloader.download_video(test_url, 'best')
+    return jsonify(result)
 
 if __name__ == '__main__':
     # Create templates directory if it doesn't exist
