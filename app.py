@@ -7,6 +7,9 @@ import threading
 import tempfile
 import logging
 import traceback
+import random
+import requests
+from urllib.parse import urlparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,14 +26,25 @@ class AdvancedYouTubeDownloader:
     def __init__(self):
         self.temp_dir = tempfile.mkdtemp()
         self.cookies_file = "cookies.txt"
-        self.user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+        self.user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        
+        # Multiple user agents to rotate
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
+        ]
         
         # Verify cookies file exists
         if not os.path.exists(self.cookies_file):
             logger.warning(f"Cookies file '{self.cookies_file}' not found. Downloading without cookies.")
         
     def get_ydl_options(self, format_type='best'):
-        """Get yt-dlp options with custom cookies and user agent"""
+        """Get yt-dlp options with enhanced anti-detection measures"""
+        
+        # Rotate user agents
+        user_agent = random.choice(self.user_agents)
         
         options = {
             'outtmpl': os.path.join(self.temp_dir, '%(title).100s.%(ext)s'),
@@ -38,7 +52,7 @@ class AdvancedYouTubeDownloader:
             'no_warnings': False,
             'extract_flat': False,
             'http_headers': {
-                'User-Agent': self.user_agent,
+                'User-Agent': user_agent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate, br',
@@ -50,15 +64,27 @@ class AdvancedYouTubeDownloader:
                 'Sec-Fetch-Site': 'none',
                 'Sec-Fetch-User': '?1',
                 'Cache-Control': 'max-age=0',
+                'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Linux"',
             },
-            'sleep_interval': 2,
-            'max_sleep_interval': 5,
+            'sleep_interval': random.randint(2, 5),
+            'max_sleep_interval': 8,
             'ignoreerrors': True,
             'no_check_certificate': True,
             'prefer_insecure': False,
             'geo_bypass': True,
             'geo_bypass_country': 'US',
-            'verbose': True,
+            'verbose': False,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['configs', 'webpage'],
+                }
+            },
+            'postprocessor_args': {
+                'sponsorblock': ['--remove', 'all'],
+            }
         }
         
         # Add cookies if file exists
@@ -95,16 +121,35 @@ class AdvancedYouTubeDownloader:
             
         return options
     
+    def normalize_youtube_url(self, url):
+        """Convert YouTube Shorts URLs to regular watch URLs"""
+        if 'youtube.com/shorts/' in url:
+            # Extract video ID from shorts URL
+            video_id = url.split('/shorts/')[-1].split('?')[0]
+            return f'https://www.youtube.com/watch?v={video_id}'
+        elif 'youtu.be/' in url:
+            # Extract video ID from youtu.be URL
+            video_id = url.split('youtu.be/')[-1].split('?')[0]
+            return f'https://www.youtube.com/watch?v={video_id}'
+        return url
+    
     def download_video(self, url, format_type='best'):
-        """Download video with enhanced error handling"""
+        """Download video with enhanced error handling and URL normalization"""
         try:
-            logger.info(f"Starting download: {url} with format {format_type}")
+            # Normalize URL first
+            normalized_url = self.normalize_youtube_url(url)
+            logger.info(f"Starting download - Original: {url}, Normalized: {normalized_url}, Format: {format_type}")
             
             options = self.get_ydl_options(format_type)
             
             with yt_dlp.YoutubeDL(options) as ydl:
                 # First get info without downloading
-                info = ydl.extract_info(url, download=False)
+                try:
+                    info = ydl.extract_info(normalized_url, download=False, process=False)
+                except Exception as e:
+                    logger.error(f"Info extraction failed: {e}")
+                    # Try with process=True for some videos
+                    info = ydl.extract_info(normalized_url, download=False)
                 
                 if not info:
                     return {'error': 'Could not extract video information - video may be private, age-restricted, or unavailable'}
@@ -119,8 +164,11 @@ class AdvancedYouTubeDownloader:
                 if duration > 7200:  # 2 hours
                     return {'error': 'Video too long (max 2 hours allowed)'}
                 
+                # Add random delay to mimic human behavior
+                time.sleep(random.uniform(1, 3))
+                
                 # Download the video
-                result = ydl.extract_info(url, download=True)
+                result = ydl.extract_info(normalized_url, download=True)
                 
                 filename = ydl.prepare_filename(result)
                 if format_type == 'audio':
@@ -145,8 +193,8 @@ class AdvancedYouTubeDownloader:
             error_msg = str(e)
             if "Private video" in error_msg:
                 return {'error': 'This is a private video. Cannot download.'}
-            elif "Sign in" in error_msg:
-                return {'error': 'Age-restricted video. Try using cookies.txt with logged-in session.'}
+            elif "Sign in" in error_msg or "bot" in error_msg.lower():
+                return {'error': 'YouTube is blocking requests. Try using a different video or check your cookies.txt file.'}
             elif "Video unavailable" in error_msg:
                 return {'error': 'Video is unavailable or removed.'}
             else:
@@ -189,14 +237,17 @@ def get_video_info():
     
     try:
         # Validate URL
-        if not ('youtube.com/watch' in url or 'youtu.be/' in url):
+        if not any(domain in url for domain in ['youtube.com', 'youtu.be']):
             return jsonify({'error': 'Please provide a valid YouTube URL'}), 400
+        
+        # Normalize URL
+        normalized_url = downloader.normalize_youtube_url(url)
         
         options = downloader.get_ydl_options()
         options['extract_flat'] = False
         
         with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(normalized_url, download=False)
             
             if not info:
                 return jsonify({'error': 'Could not fetch video information. The video may be private, age-restricted, or unavailable.'}), 404
@@ -229,8 +280,8 @@ def get_video_info():
         
         if "Private video" in error_msg:
             return jsonify({'error': 'This is a private video. Cannot access.'}), 403
-        elif "Sign in" in error_msg or "age restricted" in error_msg.lower():
-            return jsonify({'error': 'Age-restricted video. Try using a cookies.txt file with logged-in YouTube session.'}), 403
+        elif "Sign in" in error_msg or "age restricted" in error_msg.lower() or "bot" in error_msg.lower():
+            return jsonify({'error': 'YouTube is blocking automated requests. Try using a different video or ensure your cookies.txt is valid.'}), 403
         elif "Video unavailable" in error_msg:
             return jsonify({'error': 'Video is unavailable or has been removed.'}), 404
         else:
@@ -250,7 +301,7 @@ def download_video():
         return jsonify({'error': 'URL parameter is required'}), 400
     
     # Validate URL
-    if not ('youtube.com/watch' in url or 'youtu.be/' in url):
+    if not any(domain in url for domain in ['youtube.com', 'youtu.be']):
         return jsonify({'error': 'Please provide a valid YouTube URL'}), 400
     
     # Validate format
@@ -283,42 +334,12 @@ def download_video():
         logger.error(f"File send error: {e}")
         return jsonify({'error': f'File send failed: {str(e)}'}), 500
 
-@app.route('/audio')
-def download_audio():
-    """Download audio only endpoint"""
-    url = request.args.get('url')
-    
-    if not url:
-        return jsonify({'error': 'URL parameter is required'}), 400
-    
-    # Validate URL
-    if not ('youtube.com/watch' in url or 'youtu.be/' in url):
-        return jsonify({'error': 'Please provide a valid YouTube URL'}), 400
-    
-    result = downloader.download_video(url, 'audio')
-    
-    if 'error' in result:
-        return jsonify(result), 500
-    
-    try:
-        download_name = f"{result['title']}.mp3"
-        download_name = "".join(c for c in download_name if c.isalnum() or c in ('.', '-', '_'))
-        
-        return send_file(
-            result['filename'],
-            as_attachment=True,
-            download_name=download_name,
-            mimetype='audio/mpeg'
-        )
-    except Exception as e:
-        return jsonify({'error': f'File send failed: {str(e)}'}), 500
-
 @app.route('/status')
 def status():
     """Service status endpoint"""
     return jsonify({
         'status': 'active',
-        'user_agent': downloader.user_agent,
+        'user_agent': 'Rotating user agents',
         'cookies_loaded': os.path.exists(downloader.cookies_file),
         'temp_files': len(os.listdir(downloader.temp_dir)) if os.path.exists(downloader.temp_dir) else 0
     })
